@@ -6,11 +6,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/syndtr/goleveldb/leveldb"
 	zlog "github.com/zhangyu0310/zlogger"
 	"google.golang.org/grpc"
 
-	"zraft/entry"
+	"zraft/log"
+	"zraft/queue"
 	"zraft/rpc"
+	"zraft/statemachine"
 )
 
 var gZRaft *ZRaft
@@ -23,7 +26,7 @@ type ZRaft struct {
 	// raft params
 	currentTerm uint64
 	votedFor    ZID
-	log         map[uint64]*entry.Entry
+	log         log.Log
 	commitIndex uint64
 	lastApplied uint64
 	nextIndex   []uint64
@@ -35,23 +38,21 @@ type ZRaft struct {
 	Srv           *grpc.Server
 	Clients       []rpc.RaftServiceClient
 	clusterSize   int
-	commitEntries *entry.BlockingQueue
-	replEntries   *entry.UnblockingQueue
-	nextEntryId   uint64
+	replEntries   *queue.UnblockingQueue
 	lastRecvTime  time.Time
 	randomTimeout time.Duration
 	voteResult    []bool
-	readMap       map[uint64][]*entry.Entry
+	writeCbMap    map[uint64]func(error)
 	voteCbLock    sync.Mutex
 }
 
-func NewZRaft(size int) {
+func NewZRaft(size int, l log.Log) {
 	gZRaft = &ZRaft{
 		currentTerm:   1,
 		votedFor:      -1,
-		log:           make(map[uint64]*entry.Entry),
-		commitIndex:   1,
-		lastApplied:   1,
+		log:           l,
+		commitIndex:   0,
+		lastApplied:   0,
 		nextIndex:     make([]uint64, size),
 		matchIndex:    make([]uint64, size),
 		role:          Follower,
@@ -59,12 +60,10 @@ func NewZRaft(size int) {
 		Srv:           nil,
 		Clients:       make([]rpc.RaftServiceClient, size),
 		clusterSize:   size,
-		commitEntries: entry.NewBlockingQueue(),
-		replEntries:   entry.NewUnblockingQueue(),
-		nextEntryId:   1,
+		replEntries:   queue.NewUnblockingQueue(),
 		lastRecvTime:  time.Time{},
 		randomTimeout: getRandomTimeout(),
-		readMap:       make(map[uint64][]*entry.Entry),
+		writeCbMap:    make(map[uint64]func(error)),
 	}
 	gZRaft.resetVoteResult()
 	gZRaft.Invalid.Store(true)
@@ -72,6 +71,26 @@ func NewZRaft(size int) {
 
 func (z *ZRaft) resetVoteResult() {
 	z.voteResult = make([]bool, z.clusterSize)
+}
+
+func (z *ZRaft) GetZID() ZID {
+	return z.ID
+}
+
+func (z *ZRaft) GetNextIndex() uint64 {
+	return z.nextIndex[z.ID]
+}
+
+func (z *ZRaft) SetNextIndex(n uint64) {
+	z.nextIndex[z.ID] = n
+}
+
+func (z *ZRaft) NextIndexAdd(n uint64) {
+	z.nextIndex[z.ID] += n
+}
+
+func (z *ZRaft) NextIndexSub(n uint64) {
+	z.nextIndex[z.ID] -= n
 }
 
 func (z *ZRaft) Handle() {
@@ -123,30 +142,25 @@ func (z *ZRaft) Handle() {
 		}
 	case Leader:
 		// Put new entries to entry map
-		rEntries := z.replEntries.PopAll()
-		if rEntries != nil {
-			for _, e := range rEntries {
-				if e.Op == entry.OpGetEntry {
-					if z.nextEntryId == 0 {
-						z.commitEntries.Push(e)
-					} else {
-						e.Term = z.currentTerm
-						e.Index = z.nextEntryId - 1
-						z.readMap[z.nextEntryId-1] = append(z.readMap[z.nextEntryId-1], e)
-					}
-				} else {
-					e.Term = z.currentTerm
-					e.Index = z.nextEntryId
-					z.log[z.nextEntryId] = e
-					z.nextEntryId++
+		wrappers := z.replEntries.PopAll()
+		if wrappers != nil {
+			for _, wrapper := range wrappers {
+				entry := wrapper.Entry
+				entry.Term = z.currentTerm
+				entry.Index = z.GetNextIndex()
+				err := z.log.Store(entry)
+				if err != nil {
+					z.ChangeToFollower()
+					return
 				}
+				z.NextIndexAdd(1)
+				z.writeCbMap[entry.Index] = wrapper.Callback
 			}
 		}
 		// Send entries or heartbeat to all client
 		var wg sync.WaitGroup
 		for zid, cli := range z.Clients {
 			if ZID(zid) == z.ID {
-				z.nextIndex[zid] = z.nextEntryId
 				continue
 			}
 			wg.Add(1)
@@ -160,21 +174,40 @@ func (z *ZRaft) Handle() {
 		quorum := z.clusterSize/2 + 1
 		indexVec := make([]uint64, 0, 10)
 		for _, index := range z.nextIndex {
-			indexVec = append(indexVec, index)
+			indexVec = append(indexVec, index-1)
 		}
 		sort.Slice(indexVec, func(i, j int) bool {
 			return indexVec[i] > indexVec[j]
 		})
 		oldCommitIndex := z.commitIndex
-		quorumIndex := indexVec[quorum]
+		quorumIndex := indexVec[quorum-1]
 		z.commitIndex = quorumIndex
-		for i := oldCommitIndex; i <= z.commitIndex; i++ {
-			z.commitEntries.Push(z.log[i])
-			es, ok := z.readMap[i]
-			if ok {
-				for _, e := range es {
-					z.commitEntries.Push(e)
-				}
+		batch := leveldb.Batch{}
+		for i := oldCommitIndex + 1; i <= z.commitIndex; i++ {
+			entry, err := z.log.Load(i)
+			if err != nil || entry == nil {
+				zlog.Error("log load entry failed.", err)
+				z.commitIndex = i - 1
+				z.ChangeToFollower()
+				return
+			}
+			switch entry.Op {
+			case log.OpPutEntry:
+				batch.Put(entry.Key, entry.Value)
+			case log.OpDelEntry:
+				batch.Delete(entry.Key)
+			}
+		}
+		err := statemachine.S.Write(&batch, nil)
+		if err != nil {
+			zlog.Error("State machine write batch failed.", err)
+			z.ChangeToFollower()
+			return
+		}
+		for i := oldCommitIndex + 1; i <= z.commitIndex; i++ {
+			cb, ok := z.writeCbMap[i]
+			if ok && cb != nil {
+				cb(nil)
 			}
 		}
 	default:

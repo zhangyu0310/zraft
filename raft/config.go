@@ -1,6 +1,10 @@
 package raft
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"zraft/log"
+)
 
 // Config Configurations of server.
 type Config struct {
@@ -8,6 +12,7 @@ type Config struct {
 	LocalIP      string
 	ServerPort   int
 	HeartbeatGap int // Millisecond
+	Log          log.Log
 }
 
 var (

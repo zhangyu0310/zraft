@@ -1,12 +1,13 @@
 package zraft
 
 import (
-	"zraft/entry/statemachine"
 	"zraft/raft"
+	"zraft/statemachine"
 )
 
 func InitZRaft(config func(*raft.Config)) {
 	raft.InitializeConfig(config)
+	// FIXME: Init log is service.
 	_ = raft.InitService()
 	_ = raft.Start()
 }
@@ -15,12 +16,9 @@ func Close() {
 	raft.Stop()
 }
 
-func GetLocal(key []byte) ([]byte, error) {
-	return statemachine.S.Get(key, nil)
-}
-
 func Get(key []byte) ([]byte, error) {
-	return raft.Get(key)
+	// FIXME: If not leader, send req to get result.
+	return statemachine.S.Get(key, nil)
 }
 
 func Put(key, value []byte) error {

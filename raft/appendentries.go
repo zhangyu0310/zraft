@@ -5,10 +5,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/syndtr/goleveldb/leveldb"
 	zlog "github.com/zhangyu0310/zlogger"
 
-	"zraft/entry"
+	"zraft/log"
 	"zraft/rpc"
+	"zraft/statemachine"
 )
 
 func (z *ZRaft) AppendEntries(
@@ -27,32 +29,52 @@ func (z *ZRaft) AppendEntries(
 		}
 	}
 	z.lastRecvTime = time.Now()
-	prevLog, ok := z.log[req.PrevLogIndex]
-	if !ok {
-		zlog.DebugF("Log index [%ld] is not exist", req.PrevLogIndex)
+	prevLog, err := z.log.Load(req.PrevLogIndex)
+	if err != nil || prevLog == nil {
+		zlog.ErrorF("Log index [%ld] is not exist", req.PrevLogIndex)
 		return
 	} else if prevLog.Term != req.PrevLogTerm {
-		z.log[req.PrevLogIndex] = nil
-		z.nextEntryId = req.PrevLogIndex
+		z.SetNextIndex(req.PrevLogIndex)
 		zlog.DebugF("Log index [%ld] have different term [%ld] with leader [%ld]",
 			req.PrevLogIndex, prevLog.Term, req.PrevLogTerm)
 		return
 	}
-	z.nextEntryId = req.PrevLogIndex + 1
+	z.SetNextIndex(req.PrevLogIndex + 1)
 	for _, e := range req.Entries {
-		z.log[z.nextEntryId] = &entry.Entry{
+		err = z.log.Store(&log.Entry{
 			Term:  req.Term,
-			Index: z.nextEntryId,
+			Index: z.GetNextIndex(),
 			Op:    int8(e.Op),
 			Key:   e.Key,
 			Value: e.Value,
+		})
+		if err != nil {
+			zlog.ErrorF("Store log failed, index [%ld], term [%ld], err: %s",
+				z.GetNextIndex(), req.Term, err)
+			return
 		}
-		z.nextEntryId++
+		z.NextIndexAdd(1)
 	}
 	oldCommitIndex := z.commitIndex
 	z.commitIndex = req.LeaderCommit
+	batch := leveldb.Batch{}
 	for i := oldCommitIndex; i <= z.commitIndex; i++ {
-		z.commitEntries.Push(z.log[i])
+		entry, err := z.log.Load(i)
+		if err != nil {
+			zlog.Error("Get commit log from raft log failed.", err)
+			return reply, err
+		}
+		switch entry.Op {
+		case log.OpPutEntry:
+			batch.Put(entry.Key, entry.Value)
+		case log.OpDelEntry:
+			batch.Delete(entry.Key)
+		}
+	}
+	err = statemachine.S.Write(&batch, nil)
+	if err != nil {
+		zlog.Error("State machine apply committed log failed.", err)
+		return
 	}
 	reply.Success = true
 	return
@@ -66,10 +88,14 @@ func sendAppendEntriesRpc(z *ZRaft, zid ZID, cli rpc.RaftServiceClient, wg *sync
 	}
 	// Get index of entry which need to send
 	nextIndex := z.nextIndex[zid]
-	entries := make([]*entry.Entry, 0, 100)
+	entries := make([]*log.Entry, 0, 100)
 	for {
-		e, ok := z.log[nextIndex]
-		if !ok {
+		e, err := z.log.Load(nextIndex)
+		if err != nil {
+			zlog.Error("Raft log load failed.", err)
+			z.ChangeToFollower()
+		}
+		if e == nil {
 			break
 		}
 		entries = append(entries, e)
@@ -78,8 +104,8 @@ func sendAppendEntriesRpc(z *ZRaft, zid ZID, cli rpc.RaftServiceClient, wg *sync
 	rpcEntries := makeRpcEntries(entries)
 	// Get prev log entry
 	prevLogIndex := z.nextIndex[zid] - 1
-	prevEntry := z.log[prevLogIndex]
-	if prevEntry == nil {
+	prevEntry, err := z.log.Load(prevLogIndex)
+	if prevEntry == nil || err != nil {
 		zlog.Panic("Last entry can't be nil.",
 			"Last log index is", prevLogIndex)
 	}
@@ -107,7 +133,6 @@ func sendAppendEntriesRpc(z *ZRaft, zid ZID, cli rpc.RaftServiceClient, wg *sync
 		z.nextIndex[zid] = nextIndex
 		z.matchIndex[zid] = nextIndex - 1
 	} else {
-		z.nextIndex[zid] = z.matchIndex[zid]
-		z.matchIndex[zid] -= 1
+		z.nextIndex[zid] = z.nextIndex[zid] - 1
 	}
 }

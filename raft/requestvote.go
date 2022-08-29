@@ -34,9 +34,9 @@ func (z *ZRaft) RequestVote(
 			z.currentTerm, z.votedFor)
 		return
 	} else {
-		lastLogIndex := z.nextEntryId - 1
-		lastEntry := z.log[lastLogIndex]
-		if lastEntry == nil {
+		lastLogIndex := z.GetNextIndex() - 1
+		lastEntry, err := z.log.Load(lastLogIndex)
+		if lastEntry == nil || err != nil {
 			zlog.Panic("Last entry can't be nil.",
 				"Last log index is", lastLogIndex)
 		}
@@ -55,9 +55,9 @@ func sendRequestVoteRpc(z *ZRaft, zid ZID, cli rpc.RaftServiceClient, wg *sync.W
 		createConnectionForRpc(z, zid, "RequestVote")
 		return
 	}
-	lastLogIndex := z.nextEntryId - 1
-	lastEntry := z.log[lastLogIndex]
-	if lastEntry == nil {
+	lastLogIndex := z.GetNextIndex() - 1
+	lastEntry, err := z.log.Load(lastLogIndex)
+	if lastEntry == nil || err != nil {
 		zlog.Panic("Last entry can't be nil.",
 			"Last log index is", lastLogIndex)
 	}

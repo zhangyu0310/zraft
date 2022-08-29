@@ -1,9 +1,11 @@
-package entry
+package queue
 
 import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"zraft/log"
 )
 
 func TestBlockingQueue(t *testing.T) {
@@ -15,9 +17,9 @@ func TestBlockingQueue(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			for j := 0; j < 10; j++ {
-				queue.Push(&Entry{
+				queue.Push(&log.Entry{
 					Term:  uint64(i),
-					Op:    OpInvalid,
+					Op:    log.OpInvalid,
 					Key:   []byte(fmt.Sprintf("%d:%d", i, j)),
 					Value: []byte("test"),
 				})

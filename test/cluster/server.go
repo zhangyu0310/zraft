@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/zhangyu0310/zlogger"
@@ -46,7 +45,6 @@ func main() {
 				}
 				fmt.Printf("My id is [%d]. I am leader.\n", *id)
 			}
-			time.Sleep(time.Second * 2)
 		}
 	}()
 	<-exitChan

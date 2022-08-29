@@ -6,7 +6,7 @@ import (
 
 	zlog "github.com/zhangyu0310/zlogger"
 
-	"zraft/entry"
+	"zraft/log"
 	"zraft/rpc"
 )
 
@@ -16,7 +16,7 @@ func getRandomTimeout() time.Duration {
 	return time.Duration(timeout) * time.Millisecond
 }
 
-func makeRpcEntries(entries []*entry.Entry) []*rpc.Entry {
+func makeRpcEntries(entries []*log.Entry) []*rpc.Entry {
 	rpcEntries := make([]*rpc.Entry, 0, 100)
 	for _, e := range entries {
 		rpcEntries = append(rpcEntries, &rpc.Entry{

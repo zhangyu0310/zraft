@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"zraft/entry"
+	"zraft/log"
 	"zraft/rpc"
 )
 
@@ -23,11 +23,11 @@ func TestGetRandomTimeout(t *testing.T) {
 }
 
 func TestMakeRpcEntries(t *testing.T) {
-	entries := []*entry.Entry{
-		{Term: 1, Index: 1, Op: entry.OpPutEntry, Key: []byte("put"), Value: []byte("1")},
-		{Term: 1, Index: 2, Op: entry.OpDelEntry, Key: []byte("del"), Value: []byte("1")},
-		{Term: 2, Index: 3, Op: entry.OpPutEntry, Key: []byte("put"), Value: []byte("2")},
-		{Term: 3, Index: 4, Op: entry.OpDelEntry, Key: []byte("del"), Value: []byte("2")},
+	entries := []*log.Entry{
+		{Term: 1, Index: 1, Op: log.OpPutEntry, Key: []byte("put"), Value: []byte("1")},
+		{Term: 1, Index: 2, Op: log.OpDelEntry, Key: []byte("del"), Value: []byte("1")},
+		{Term: 2, Index: 3, Op: log.OpPutEntry, Key: []byte("put"), Value: []byte("2")},
+		{Term: 3, Index: 4, Op: log.OpDelEntry, Key: []byte("del"), Value: []byte("2")},
 	}
 	rpcEntries := makeRpcEntries(entries)
 	for i := 0; i < 4; i++ {

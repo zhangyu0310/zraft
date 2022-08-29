@@ -10,9 +10,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"zraft/entry"
-	"zraft/entry/statemachine"
+	"zraft/log"
+	"zraft/queue"
 	"zraft/rpc"
+	"zraft/statemachine"
 )
 
 var ServerIsNil = errors.New("raft server is nil")
@@ -23,7 +24,15 @@ func InitService() error {
 	cfg := GetGlobalConfig()
 	// TODO: Use better grpc options.
 	server := grpc.NewServer(grpc.EmptyServerOption{})
-	NewZRaft(len(cfg.ServerList))
+	if cfg.Log == nil {
+		cfg.Log = log.NewZRaftLog()
+		err := cfg.Log.Init()
+		if err != nil {
+			zlog.Error("Init raft log failed.", err)
+			return err
+		}
+	}
+	NewZRaft(len(cfg.ServerList), cfg.Log)
 	rpc.RegisterRaftServiceServer(server, gZRaft)
 	gZRaft.Srv = server
 	return nil
@@ -78,13 +87,23 @@ func Start() error {
 	if gZRaft.ID == -1 {
 		zlog.Fatal("Self ID is invalid.")
 	} else {
-		gZRaft.log[0] = &entry.Entry{
-			Term:     gZRaft.currentTerm,
-			Index:    0,
-			Op:       -1,
-			Key:      nil,
-			Value:    nil,
-			Callback: nil,
+		firstEntry, err := gZRaft.log.Load(0)
+		if err != nil {
+			zlog.Error("Get first entry failed.", err)
+			return err
+		}
+		if firstEntry == nil {
+			err = gZRaft.log.Store(&log.Entry{
+				Term:  gZRaft.currentTerm,
+				Index: 0,
+				Op:    log.OpPutEntry,
+				Key:   nil,
+				Value: nil,
+			})
+			if err != nil {
+				zlog.Error("Init raft log failed.", err)
+				return err
+			}
 		}
 	}
 	// Run raft handle loop.
@@ -92,42 +111,6 @@ func Start() error {
 		for IsRunning() {
 			gZRaft.Handle()
 			time.Sleep(time.Duration(cfg.HeartbeatGap) * time.Millisecond)
-		}
-	}()
-	// Run loop for apply log to leveldb
-	go func() {
-		for {
-			entries := gZRaft.commitEntries.PopAll()
-			if entries == nil {
-				continue
-			}
-			for _, e := range entries {
-				if e == nil {
-					continue
-				}
-				var err error
-				switch e.Op {
-				case entry.OpPutEntry:
-					err = statemachine.S.Put(e.Key, e.Value, nil)
-					if e.Callback != nil {
-						e.Callback(nil)
-					}
-				case entry.OpDelEntry:
-					err = statemachine.S.Delete(e.Key, nil)
-					if e.Callback != nil {
-						e.Callback(nil)
-					}
-				case entry.OpGetEntry:
-					value := make([]byte, 0)
-					value, err = statemachine.S.Get(e.Key, nil)
-					if e.Callback != nil {
-						e.Callback(value)
-					}
-				}
-				if err != nil {
-					zlog.Error("Do", entry.GetOpStr(e.Op), "error.", err)
-				}
-			}
 		}
 	}()
 	return nil
@@ -143,34 +126,11 @@ func IsLeader() bool {
 
 func Stop() {
 	gZRaft.Invalid.Store(true)
+	err := gZRaft.log.Destroy()
+	if err != nil {
+		zlog.Error("zraft log destroy failed.", err)
+	}
 	statemachine.Close()
-}
-
-func Get(key []byte) ([]byte, error) {
-	if !IsRunning() {
-		return nil, ServiceIsNotRunning
-	}
-	value := make([]byte, 0)
-	if gZRaft.role == Leader {
-		finished := make(chan bool, 1)
-		gZRaft.replEntries.Push(&entry.Entry{
-			Term:  0,
-			Index: 0,
-			Op:    entry.OpPutEntry,
-			Key:   key,
-			Value: nil,
-			Callback: func(v []byte) {
-				value = v
-				finished <- true
-				close(finished)
-			},
-		})
-		<-finished
-	} else {
-		// FIXME: send request to leader.
-		return nil, NotLeader
-	}
-	return value, nil
 }
 
 func Put(key, value []byte) error {
@@ -178,24 +138,28 @@ func Put(key, value []byte) error {
 		return ServiceIsNotRunning
 	}
 	if gZRaft.role == Leader {
-		finished := make(chan bool, 1)
-		gZRaft.replEntries.Push(&entry.Entry{
-			Term:  0,
-			Index: 0,
-			Op:    entry.OpPutEntry,
-			Key:   key,
-			Value: value,
-			Callback: func([]byte) {
-				finished <- true
-				close(finished)
-			},
-		})
-		<-finished
+		zlog.Debug("Put", string(key), "begin.")
+		success := make(chan error, 1)
+		gZRaft.replEntries.Push(
+			&queue.Wrapper{
+				Entry: &log.Entry{
+					Term:  0,
+					Index: 0,
+					Op:    log.OpPutEntry,
+					Key:   key,
+					Value: value,
+				},
+				Callback: func(err error) {
+					success <- err
+					close(success)
+				}})
+		err := <-success
+		zlog.Debug("Put", string(key), "end.")
+		return err
 	} else {
 		// FIXME: send request to leader.
 		return NotLeader
 	}
-	return nil
 }
 
 func Delete(key []byte) error {
@@ -203,22 +167,26 @@ func Delete(key []byte) error {
 		return ServiceIsNotRunning
 	}
 	if gZRaft.role == Leader {
-		finished := make(chan bool, 1)
-		gZRaft.replEntries.Push(&entry.Entry{
-			Term:  0,
-			Index: 0,
-			Op:    entry.OpDelEntry,
-			Key:   key,
-			Value: nil,
-			Callback: func([]byte) {
-				finished <- true
-				close(finished)
-			},
-		})
-		<-finished
+		zlog.Debug("Delete", string(key), "begin.")
+		success := make(chan error, 1)
+		gZRaft.replEntries.Push(
+			&queue.Wrapper{
+				Entry: &log.Entry{
+					Term:  0,
+					Index: 0,
+					Op:    log.OpDelEntry,
+					Key:   key,
+					Value: nil,
+				},
+				Callback: func(err error) {
+					success <- err
+					close(success)
+				}})
+		err := <-success
+		zlog.Debug("Delete", string(key), "end.")
+		return err
 	} else {
 		// FIXME: send request to leader.
 		return NotLeader
 	}
-	return nil
 }
