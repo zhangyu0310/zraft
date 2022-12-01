@@ -7,14 +7,14 @@ import (
 	zlog "github.com/zhangyu0310/zlogger"
 )
 
-type ZDB struct {
+type DB struct {
 	memTable   *MemTable
 	immTable   *MemTable
 	walWriter  *LogWriter
 	seqCounter uint64
 }
 
-func OpenDB() (*ZDB, error) {
+func OpenDB() (*DB, error) {
 	// TODO: config config config...
 	file, err := os.OpenFile("./ZDB_WAL", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
@@ -29,7 +29,7 @@ func OpenDB() (*ZDB, error) {
 	// TODO: Check WAL file to get data which not in SST
 	// ...
 	// Create ZDB
-	db := &ZDB{
+	db := &DB{
 		memTable:   NewMemTable(&StringComparator{}),
 		immTable:   nil,
 		walWriter:  NewLogWriter(file, info.Size()),
@@ -38,29 +38,29 @@ func OpenDB() (*ZDB, error) {
 	return db, nil
 }
 
-func (z *ZDB) Close() error {
+func (z *DB) Close() error {
 	// TODO:
 	return nil
 }
 
-func (z *ZDB) Get(key []byte) ([]byte, error) {
+func (z *DB) Get(key []byte) ([]byte, error) {
 	// TODO:
 	return nil, nil
 }
 
-func (z *ZDB) Put(key, value []byte) error {
-	batch := &ZBatch{}
+func (z *DB) Put(key, value []byte) error {
+	batch := &Batch{}
 	batch.Put(key, value)
 	return z.Write(batch)
 }
 
-func (z *ZDB) Delete(key []byte) error {
-	batch := &ZBatch{}
+func (z *DB) Delete(key []byte) error {
+	batch := &Batch{}
 	batch.Delete(key)
 	return z.Write(batch)
 }
 
-func (z *ZDB) getNewSequence() uint64 {
+func (z *DB) getNewSequence() uint64 {
 	for {
 		seq := z.seqCounter
 		if atomic.CompareAndSwapUint64(&z.seqCounter, seq, seq+1) {
@@ -72,7 +72,7 @@ func (z *ZDB) getNewSequence() uint64 {
 	}
 }
 
-func (z *ZDB) Write(batch *ZBatch) error {
+func (z *DB) Write(batch *Batch) error {
 	seq := z.getNewSequence()
 	walData := make([]byte, 0, 2048)
 	for _, item := range batch.item {

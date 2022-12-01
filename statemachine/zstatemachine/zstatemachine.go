@@ -6,7 +6,7 @@ import (
 )
 
 type ZStateMachine struct {
-	*zdb.ZDB
+	*zdb.DB
 }
 
 func NewStateMachine(_ ...interface{}) (statemachine.StateMachine, error) {
@@ -23,27 +23,27 @@ func EngineName() string {
 }
 
 func (s *ZStateMachine) Close() error {
-	return s.ZDB.Close()
+	return s.DB.Close()
 }
 
 func (s *ZStateMachine) CreateBatch() statemachine.Batch {
-	return &zdb.ZBatch{}
+	return &zdb.Batch{}
 }
 
 func (s *ZStateMachine) Get(key []byte, _ interface{}) ([]byte, error) {
-	return s.ZDB.Get(key)
+	return s.DB.Get(key)
 }
 
 func (s *ZStateMachine) Put(key []byte, value []byte, _ interface{}) error {
-	return s.ZDB.Put(key, value)
+	return s.DB.Put(key, value)
 }
 
 func (s *ZStateMachine) Delete(key []byte, _ interface{}) error {
-	return s.ZDB.Delete(key)
+	return s.DB.Delete(key)
 }
 
 func (s *ZStateMachine) Write(batch statemachine.Batch, _ interface{}) error {
-	return s.ZDB.Write(batch.(*zdb.ZBatch))
+	return s.DB.Write(batch.(*zdb.Batch))
 }
 
 func (s *ZStateMachine) EngineName() string {
