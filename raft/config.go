@@ -8,11 +8,12 @@ import (
 
 // Config Configurations of server.
 type Config struct {
-	ServerList   map[ZID]string
-	LocalIP      string
-	ServerPort   int
-	HeartbeatGap int // Millisecond
-	Log          log.Log
+	ServerList         map[ZID]string
+	LocalIP            string
+	ServerPort         int
+	HeartbeatGap       int // Millisecond
+	Log                log.Log
+	StateMachineEngine string
 }
 
 var (
@@ -22,10 +23,11 @@ var (
 // InitializeConfig initialize the global config handler.
 func InitializeConfig(enforceCmdArgs func(*Config)) {
 	cfg := Config{
-		ServerList:   make(map[ZID]string),
-		LocalIP:      "127.0.0.1",
-		ServerPort:   1219,
-		HeartbeatGap: 200,
+		ServerList:         make(map[ZID]string),
+		LocalIP:            "127.0.0.1",
+		ServerPort:         1219,
+		HeartbeatGap:       200,
+		StateMachineEngine: "LevelDB",
 	}
 	// Use command config cover config file.
 	enforceCmdArgs(&cfg)

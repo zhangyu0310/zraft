@@ -23,3 +23,6 @@ pic/*.png
 
 # Zlog files
 zlogger_*
+
+# MacOS file
+.DS_Store

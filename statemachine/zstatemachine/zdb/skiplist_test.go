@@ -1,4 +1,4 @@
-package zstatemachine
+package zdb
 
 import (
 	"strconv"

@@ -18,7 +18,7 @@ func Close() {
 
 func Get(key []byte) ([]byte, error) {
 	// FIXME: If not leader, send req to get result.
-	return statemachine.S.Get(key, nil)
+	return statemachine.GetStateMachine().Get(key, nil)
 }
 
 func Put(key, value []byte) error {

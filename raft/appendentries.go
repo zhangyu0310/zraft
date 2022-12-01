@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/syndtr/goleveldb/leveldb"
 	zlog "github.com/zhangyu0310/zlogger"
 
 	"zraft/log"
@@ -57,7 +56,7 @@ func (z *ZRaft) AppendEntries(
 	}
 	oldCommitIndex := z.commitIndex
 	z.commitIndex = req.LeaderCommit
-	batch := leveldb.Batch{}
+	batch := statemachine.CreateBatch()
 	for i := oldCommitIndex; i <= z.commitIndex; i++ {
 		entry, err := z.log.Load(i)
 		if err != nil {
@@ -71,7 +70,7 @@ func (z *ZRaft) AppendEntries(
 			batch.Delete(entry.Key)
 		}
 	}
-	err = statemachine.S.Write(&batch, nil)
+	err = statemachine.GetStateMachine().Write(batch, nil)
 	if err != nil {
 		zlog.Error("State machine apply committed log failed.", err)
 		return

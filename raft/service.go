@@ -53,7 +53,10 @@ func CreateConnection(host string) rpc.RaftServiceClient {
 func Start() error {
 	gZRaft.Invalid.Store(false)
 	cfg := GetGlobalConfig()
-	statemachine.InitStateMachine()
+	err := statemachine.InitStateMachine(cfg.StateMachineEngine)
+	if err != nil {
+		zlog.Error("Start raft service failed, init state machine failed. err:", err)
+	}
 	// Start server
 	if gZRaft.Srv != nil {
 		addr := fmt.Sprintf("0.0.0.0:%d", cfg.ServerPort)

@@ -1,4 +1,4 @@
-package zstatemachine
+package zdb
 
 type VarUint64 []byte
 
@@ -28,7 +28,7 @@ func DecodeVarUint64(n VarUint64) uint64 {
 	return res
 }
 
-func GetVarUint64(data []byte, index int) (VarUint64, int) {
+func GetVarUint64(data []byte, index uint32) (VarUint64, uint32) {
 	varUint64 := make(VarUint64, 0, 4)
 	for {
 		varUint64 = append(varUint64, data[index])
@@ -41,13 +41,13 @@ func GetVarUint64(data []byte, index int) (VarUint64, int) {
 	return varUint64, index
 }
 
-type FixedUint16 []byte
+type FixedUint16 [2]byte
 
 func EncodeFixedUint16(n uint16) FixedUint16 {
-	res := make(FixedUint16, 2)
+	res := new(FixedUint16)
 	res[0] = byte(n)
 	res[1] = byte(n >> 8)
-	return res
+	return *res
 }
 
 func DecodeFixedUint16(n FixedUint16) uint16 {
@@ -56,21 +56,21 @@ func DecodeFixedUint16(n FixedUint16) uint16 {
 }
 
 func GetFixedUint16(data []byte, index int) FixedUint16 {
-	res := make(FixedUint16, 2)
+	res := new(FixedUint16)
 	res[0] = data[index]
 	res[1] = data[index+1]
-	return res
+	return *res
 }
 
-type FixedUint32 []byte
+type FixedUint32 [4]byte
 
 func EncodeFixedUint32(n uint32) FixedUint32 {
-	res := make(FixedUint32, 4)
+	res := new(FixedUint32)
 	res[0] = byte(n)
 	res[1] = byte(n >> 8)
 	res[2] = byte(n >> 16)
 	res[3] = byte(n >> 24)
-	return res
+	return *res
 }
 
 func DecodeFixedUint32(n FixedUint32) uint32 {
@@ -79,18 +79,18 @@ func DecodeFixedUint32(n FixedUint32) uint32 {
 }
 
 func GetFixedUint32(data []byte, index int) FixedUint32 {
-	res := make(FixedUint32, 4)
+	res := new(FixedUint32)
 	res[0] = data[index]
 	res[1] = data[index+1]
 	res[2] = data[index+2]
 	res[3] = data[index+3]
-	return res
+	return *res
 }
 
-type FixedUint64 []byte
+type FixedUint64 [8]byte
 
 func EncodeFixedUint64(n uint64) FixedUint64 {
-	res := make(FixedUint64, 8)
+	res := new(FixedUint64)
 	res[0] = byte(n)
 	res[1] = byte(n >> 8)
 	res[2] = byte(n >> 16)
@@ -99,7 +99,7 @@ func EncodeFixedUint64(n uint64) FixedUint64 {
 	res[5] = byte(n >> 40)
 	res[6] = byte(n >> 48)
 	res[7] = byte(n >> 56)
-	return res
+	return *res
 }
 
 func DecodeFixedUint64(n FixedUint64) uint64 {
@@ -111,7 +111,7 @@ func DecodeFixedUint64(n FixedUint64) uint64 {
 }
 
 func GetFixedUint64(data []byte, index int) FixedUint64 {
-	res := make(FixedUint64, 4)
+	res := new(FixedUint64)
 	res[0] = data[index]
 	res[1] = data[index+1]
 	res[2] = data[index+2]
@@ -120,5 +120,5 @@ func GetFixedUint64(data []byte, index int) FixedUint64 {
 	res[5] = data[index+5]
 	res[6] = data[index+6]
 	res[7] = data[index+7]
-	return res
+	return *res
 }

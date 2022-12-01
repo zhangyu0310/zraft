@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/syndtr/goleveldb/leveldb"
 	zlog "github.com/zhangyu0310/zlogger"
 	"google.golang.org/grpc"
 
@@ -182,7 +181,7 @@ func (z *ZRaft) Handle() {
 		oldCommitIndex := z.commitIndex
 		quorumIndex := indexVec[quorum-1]
 		z.commitIndex = quorumIndex
-		batch := leveldb.Batch{}
+		batch := statemachine.CreateBatch()
 		for i := oldCommitIndex + 1; i <= z.commitIndex; i++ {
 			entry, err := z.log.Load(i)
 			if err != nil || entry == nil {
@@ -198,7 +197,7 @@ func (z *ZRaft) Handle() {
 				batch.Delete(entry.Key)
 			}
 		}
-		err := statemachine.S.Write(&batch, nil)
+		err := statemachine.GetStateMachine().Write(batch, nil)
 		if err != nil {
 			zlog.Error("State machine write batch failed.", err)
 			z.ChangeToFollower()

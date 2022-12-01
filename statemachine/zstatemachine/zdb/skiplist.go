@@ -1,4 +1,4 @@
-package zstatemachine
+package zdb
 
 import (
 	"math/rand"
@@ -18,6 +18,11 @@ type SkipList struct {
 	head      *Node
 	Compare   func([]byte, []byte) int
 	maxHeight atomic.Value
+}
+
+type SkipListIterator struct {
+	skipList *SkipList
+	node     *Node
 }
 
 func NewSkipList(cmp func([]byte, []byte) int) *SkipList {
@@ -172,5 +177,46 @@ func (sl *SkipList) findLast() *Node {
 		} else {
 			x = next
 		}
+	}
+}
+
+func NewSkipListIterator(sl *SkipList) *SkipListIterator {
+	return &SkipListIterator{
+		skipList: sl,
+		node:     nil,
+	}
+}
+
+func (it *SkipListIterator) Valid() bool {
+	return it.node != nil
+}
+
+func (it *SkipListIterator) Key() []byte {
+	return it.node.Key
+}
+
+func (it *SkipListIterator) Next() {
+	it.node = it.node.Next(0)
+}
+
+func (it *SkipListIterator) Prev() {
+	it.node = it.skipList.findLessThan(it.node.Key)
+	if it.node == it.skipList.head {
+		it.node = nil
+	}
+}
+
+func (it *SkipListIterator) Seek(key []byte) {
+	it.node, _ = it.skipList.findGreaterOrEqual(key)
+}
+
+func (it *SkipListIterator) SeekToFirst() {
+	it.node = it.skipList.head.Next(0)
+}
+
+func (it *SkipListIterator) SeekToLast() {
+	it.node = it.skipList.findLast()
+	if it.node == it.skipList.head {
+		it.node = nil
 	}
 }
