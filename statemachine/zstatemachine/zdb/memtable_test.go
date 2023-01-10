@@ -29,7 +29,7 @@ func TestMemTable_Add(t *testing.T) {
 	for i := uint64(0); i < testTimes; i++ {
 		key := "Test_" + strconv.Itoa(int(i))
 		val := testMap[i]
-		lookupKey := MakeLookupKey([]byte(key), i)
+		lookupKey := MakeLookupKey([]byte(key), testTimes+1)
 		exist, memVal, err := memTable.Get(lookupKey)
 		assert.Nil(t, err)
 		assert.True(t, exist)

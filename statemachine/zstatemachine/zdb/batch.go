@@ -1,8 +1,8 @@
 package zdb
 
 const (
-	OperatePut = 0
-	OperateDel = 1
+	OperatePut = ValueTypeValue
+	OperateDel = ValueTypeDeletion
 )
 
 type BatchItem struct {
@@ -16,9 +16,9 @@ type Batch struct {
 }
 
 func (batch *Batch) Put(key, value []byte) {
-	localKey := make([]byte, 32)
+	localKey := make([]byte, len(key))
 	copy(localKey, key)
-	localValue := make([]byte, 32)
+	localValue := make([]byte, len(value))
 	copy(localValue, value)
 	batch.item = append(batch.item, &BatchItem{
 		Op:    OperatePut,
@@ -28,7 +28,7 @@ func (batch *Batch) Put(key, value []byte) {
 }
 
 func (batch *Batch) Delete(key []byte) {
-	localKey := make([]byte, 32)
+	localKey := make([]byte, len(key))
 	copy(localKey, key)
 	batch.item = append(batch.item, &BatchItem{
 		Op:    OperateDel,

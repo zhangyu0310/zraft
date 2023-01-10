@@ -1,6 +1,7 @@
 package zdb
 
 import (
+	"io"
 	"math/rand"
 	"os"
 	"testing"
@@ -206,6 +207,11 @@ func TestLogReader_ReadRecord(t *testing.T) {
 		assert.Equal(t, testRecordVec[i], record,
 			"Record different: origin [%s], record [%s]",
 			string(testRecordVec[i]), string(record))
+	}
+	for i := 0; i < 10; i++ {
+		record, err := reader.ReadRecord()
+		assert.Equal(t, err, io.EOF)
+		assert.Nil(t, record)
 	}
 	cleanTestEnv()
 }

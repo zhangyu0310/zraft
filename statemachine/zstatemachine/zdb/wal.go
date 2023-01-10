@@ -2,6 +2,7 @@ package zdb
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	zlog "github.com/zhangyu0310/zlogger"
@@ -58,6 +59,27 @@ func NewLogWriter(targetFile *os.File, fileLength int64) *LogWriter {
 		file:        targetFile,
 		blockOffset: int(fileLength % LogBlockSize),
 	}
+}
+
+func UpdateWALFile(old *LogWriter, options *Options) (*LogWriter, error) {
+	err := old.file.Close()
+	if err != nil {
+		zlog.Error("Update WAL failed, old WAL close failed, err:", err)
+		return nil, err
+	}
+	oldPath := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfMemWAL)
+	newPath := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfImmWAL)
+	err = os.Rename(oldPath, newPath)
+	if err != nil {
+		zlog.Error("Update WAL failed, rename old WAL failed, err:", err)
+		return nil, err
+	}
+	file, err := os.OpenFile(oldPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|os.O_EXCL, 0666)
+	if err != nil {
+		zlog.Error("Update WAL failed, create new memory WAL failed, err:", err)
+		return nil, err
+	}
+	return NewLogWriter(file, 0), nil
 }
 
 func (w *LogWriter) AppendRecord(record []byte) error {
@@ -137,8 +159,11 @@ func (w *LogWriter) AppendRecord(record []byte) error {
 		zlog.Error("Write WAL failed, err:", err)
 		return err
 	}
-	_ = w.file.Sync()
 	return nil
+}
+
+func (w *LogWriter) Sync() error {
+	return w.file.Sync()
 }
 
 func NewLogReader(targetFile *os.File, offset int64) (*LogReader, error) {
@@ -196,4 +221,8 @@ func (r *LogReader) ReadRecord() ([]byte, error) {
 			return nil, ErrUnknownLogType
 		}
 	}
+}
+
+func (r *LogReader) Close() error {
+	return r.file.Close()
 }

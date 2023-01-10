@@ -41,6 +41,15 @@ func GetVarUint64(data []byte, index uint32) (VarUint64, uint32) {
 	return varUint64, index
 }
 
+func GetLengthAndValue(data []byte, index uint32) (uint32, []byte, uint32) {
+	var lenVar VarUint64
+	lenVar, index = GetVarUint64(data, index)
+	resLen := DecodeVarUint64(lenVar)
+	result := data[index : index+uint32(resLen)]
+	index += uint32(resLen)
+	return uint32(resLen), result, index
+}
+
 type FixedUint16 [2]byte
 
 func EncodeFixedUint16(n uint16) FixedUint16 {

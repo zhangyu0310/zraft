@@ -2,36 +2,44 @@ package zdb
 
 import zlog "github.com/zhangyu0310/zlogger"
 
-// SequenceMagicNum ---> 0 [1 repeat 63 times]
-const SequenceMagicNum = 255
+const (
+	// SequenceMagicNum ---> 1111 1111
+	SequenceMagicNum = 255
+	// MaxSequenceNum only last 8 bit is 0
+	MaxSequenceNum = uint64(0xFFFFFFFFFFFFFF00)
+)
 
 type InternalKey struct {
 	Key []byte
-	// Sequence [sequence] [deletion] = total 8 bytes
+	// sequence [sequence] [deletion] = total 8 bytes
 	//            7 byte     1 bytes
-	Sequence uint64
+	sequence uint64
 }
 
 func NewInternalKey(userKey []byte, sequence uint64, valType uint8) *InternalKey {
 	internalKey := &InternalKey{
 		Key:      userKey,
-		Sequence: sequence<<8 | uint64(valType),
+		sequence: sequence<<8 | uint64(valType),
 	}
 	return internalKey
 }
 
 func (key *InternalKey) GetSequenceNum() uint64 {
-	return key.Sequence >> 8
+	return key.sequence >> 8
 }
 
 func (key *InternalKey) IsDeleted() bool {
-	return (key.Sequence & SequenceMagicNum) == ValueTypeDeletion
+	return (key.sequence & SequenceMagicNum) == ValueTypeDeletion
+}
+
+func (key *InternalKey) GetKeyType() uint8 {
+	return uint8(key.sequence & SequenceMagicNum)
 }
 
 func InternalKeyEncode(key *InternalKey) []byte {
 	data := make([]byte, 0, len(key.Key)+8)
 	data = append(data, key.Key...)
-	fixedSeq := EncodeFixedUint64(key.Sequence)
+	fixedSeq := EncodeFixedUint64(key.sequence)
 	data = append(data, fixedSeq[:]...)
 	return data
 }
@@ -45,7 +53,7 @@ func InternalKeyDecode(data []byte) *InternalKey {
 	copy(seq[:], data[dataLen-8:])
 	key := &InternalKey{
 		Key:      data[:dataLen-8],
-		Sequence: DecodeFixedUint64(seq),
+		sequence: DecodeFixedUint64(seq),
 	}
 	return key
 }

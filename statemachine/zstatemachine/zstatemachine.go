@@ -10,7 +10,7 @@ type ZStateMachine struct {
 }
 
 func NewStateMachine(_ ...interface{}) (statemachine.StateMachine, error) {
-	db, err := zdb.OpenDB()
+	db, err := zdb.OpenDB(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -34,16 +34,16 @@ func (s *ZStateMachine) Get(key []byte, _ interface{}) ([]byte, error) {
 	return s.DB.Get(key)
 }
 
-func (s *ZStateMachine) Put(key []byte, value []byte, _ interface{}) error {
-	return s.DB.Put(key, value)
+func (s *ZStateMachine) Put(key []byte, value []byte, op interface{}) error {
+	return s.DB.Put(key, value, op.(*zdb.WriteOptions))
 }
 
-func (s *ZStateMachine) Delete(key []byte, _ interface{}) error {
-	return s.DB.Delete(key)
+func (s *ZStateMachine) Delete(key []byte, op interface{}) error {
+	return s.DB.Delete(key, op.(*zdb.WriteOptions))
 }
 
-func (s *ZStateMachine) Write(batch statemachine.Batch, _ interface{}) error {
-	return s.DB.Write(batch.(*zdb.Batch))
+func (s *ZStateMachine) Write(batch statemachine.Batch, op interface{}) error {
+	return s.DB.Write(batch.(*zdb.Batch), op.(*zdb.WriteOptions))
 }
 
 func (s *ZStateMachine) EngineName() string {

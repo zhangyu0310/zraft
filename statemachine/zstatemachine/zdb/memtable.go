@@ -47,7 +47,7 @@ func (table *MemTable) Get(key *LookupKey) (bool, []byte, error) {
 	return false, nil, nil
 }
 
-func (table *MemTable) Add(seq uint64, valueType uint8, key, value []byte) []byte {
+func (table *MemTable) Add(seq uint64, valueType uint8, key, value []byte) {
 	keyLen := EncodeVarUint64(uint64(len(key) + 8))
 	internalKey := NewInternalKey(key, seq, valueType)
 	keyData := InternalKeyEncode(internalKey)
@@ -58,7 +58,18 @@ func (table *MemTable) Add(seq uint64, valueType uint8, key, value []byte) []byt
 	data = append(data, valLen...)
 	data = append(data, value...)
 	table.list.Insert(data)
-	return data
+}
+
+func (table *MemTable) AddData(data []byte) {
+	table.list.Insert(data)
+}
+
+func (table *MemTable) GetCurrentHeight() int {
+	return table.list.GetMaxHeight()
+}
+
+func (table *MemTable) Empty() bool {
+	return table.list.head.Next(0) == nil
 }
 
 type MemTableKeyComparator struct {
