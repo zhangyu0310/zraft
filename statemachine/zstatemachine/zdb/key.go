@@ -24,6 +24,10 @@ func NewInternalKey(userKey []byte, sequence uint64, valType uint8) *InternalKey
 	return internalKey
 }
 
+func (key *InternalKey) GetUserKey() []byte {
+	return key.Key
+}
+
 func (key *InternalKey) GetSequenceNum() uint64 {
 	return key.sequence >> 8
 }

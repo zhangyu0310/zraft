@@ -18,17 +18,21 @@ var (
 const (
 	NameOfMemWAL = "ZDB_WAL_MEM"
 	NameOfImmWAL = "ZDB_WAL_IMM"
+
+	L0TablePrefix = "ZDB_L0"
 )
 
 type DB struct {
-	memTable   *MemTable
-	immTable   *MemTable
-	walWriter  *LogWriter
-	seqCounter uint64
-	options    *Options
-	writeGroup []*Writer
-	writeLock  *sync.Mutex
-	bgError    error
+	memTable     *MemTable
+	immTable     *MemTable
+	walWriter    *LogWriter
+	seqCounter   uint64
+	options      *Options
+	writeGroup   []*Writer
+	writeLock    *sync.Mutex
+	tableL0Index uint32
+	tableMeta    []map[string]*TableMeta
+	bgError      error
 }
 
 type Writer struct {
@@ -57,13 +61,19 @@ func OpenDB(options *Options) (*DB, error) {
 	}
 	// Create ZDB
 	db := &DB{
-		memTable:   NewMemTable(&StringComparator{}),
-		immTable:   NewMemTable(&StringComparator{}),
-		walWriter:  NewLogWriter(file, info.Size()),
-		seqCounter: uint64(0), // Sequence will be updated when read WAL over.
-		options:    options,
-		writeGroup: make([]*Writer, 0, 16),
-		writeLock:  &sync.Mutex{},
+		memTable:     NewMemTable(&StringComparator{}),
+		immTable:     NewMemTable(&StringComparator{}),
+		walWriter:    NewLogWriter(file, info.Size()),
+		seqCounter:   uint64(0), // Sequence will be updated when read WAL over.
+		options:      options,
+		writeGroup:   make([]*Writer, 0, 16),
+		writeLock:    &sync.Mutex{},
+		tableL0Index: 0,
+		tableMeta:    make([]map[string]*TableMeta, MaxTableLevel),
+		bgError:      nil,
+	}
+	for i := 0; i < MaxTableLevel; i++ {
+		db.tableMeta[i] = make(map[string]*TableMeta)
 	}
 	err = db.recoverDataFromWAL()
 	if err != nil {
@@ -137,7 +147,7 @@ func (z *DB) recoverDataFromWAL() error {
 }
 
 func (z *DB) Close() error {
-	err := z.walWriter.file.Close()
+	err := z.walWriter.Close()
 	if err != nil {
 		zlog.Error("Close WAL file handler failed, err:", err)
 		return err
@@ -147,6 +157,7 @@ func (z *DB) Close() error {
 
 func (z *DB) Get(key []byte) ([]byte, error) {
 	lookup := MakeLookupKey(key, z.seqCounter)
+	// Search mem table
 	exist, value, err := z.memTable.Get(lookup)
 	if err != nil {
 		if errors.Is(err, ErrDataDeleted) {
@@ -156,18 +167,20 @@ func (z *DB) Get(key []byte) ([]byte, error) {
 	}
 	if exist {
 		return value, nil
-	} else {
-		exist, value, err = z.immTable.Get(lookup)
-		if err != nil {
-			if errors.Is(err, ErrDataDeleted) {
-				return nil, ErrKeyIsNotExist
-			}
-			return nil, err
-		}
-		if exist {
-			return value, nil
-		}
 	}
+	// Search imm table
+	exist, value, err = z.immTable.Get(lookup)
+	if err != nil {
+		if errors.Is(err, ErrDataDeleted) {
+			return nil, ErrKeyIsNotExist
+		}
+		return nil, err
+	}
+	if exist {
+		return value, nil
+	}
+	// Search L0 files
+
 	return nil, ErrKeyIsNotExist
 }
 
@@ -208,24 +221,79 @@ func makeData(seq uint64, valueType uint8, key, value []byte) []byte {
 	return data
 }
 
+func (z *DB) makeImmToL0(tableName string) error {
+	tb, err := NewTableBuilder(tableName)
+	if err != nil {
+		zlog.ErrorF("New L0 table builder [%s] failed, err: %s", tableName, err)
+		return err
+	}
+
+	immIter := NewMemTableIterator(z.immTable)
+	bb := NewBlockBuilder()
+	immIter.SeekToFirst()
+	for immIter.Valid() {
+		bb.Append(immIter.Get())
+		if bb.Size() > NormalBlockSize {
+			data, lastKey, err := bb.Build(MaxRestartCount)
+			if err != nil {
+				zlog.Error("Block builder build failed, err:", err)
+				return err
+			}
+			err = tb.Append(data, lastKey)
+			if err != nil {
+				zlog.Error("Table builder append failed, err:", err)
+				return err
+			}
+			bb = NewBlockBuilder()
+		}
+		immIter.Next()
+	}
+
+	err = tb.Build()
+	if err != nil {
+		zlog.Error("Table builder build failed, err:", err)
+		return err
+	}
+	z.tableL0Index++
+	z.immTable = nil
+	immWALPath := fmt.Sprintf("%s/%s", z.options.DataDirPath, NameOfImmWAL)
+	_ = os.Remove(immWALPath)
+	return nil
+}
+
 func (z *DB) makeSomeSpace() error {
 	if z.bgError != nil {
 		zlog.Error("DB have bg error:", z.bgError)
 		return z.bgError
 	}
-	if z.memTable.GetCurrentHeight() >= z.options.MaxHeightOfMemTable {
-		if z.immTable.Empty() {
-			walWriter, err := UpdateWALFile(z.walWriter, z.options)
+	walStat, err := z.walWriter.Size()
+	if err != nil {
+		zlog.Error("Get WAL file stat failed, err:", err)
+		return err
+	}
+	if walStat > MaxWALFileSize {
+		// Move memTable to immTable need a lot of time.
+		// So unlock for other routine to put their writer into writeGroup.
+		z.writeLock.Unlock()
+		defer z.writeLock.Lock()
+		if !z.immTable.Empty() {
+			tableName := fmt.Sprintf("%s.index-%d", L0TablePrefix, z.tableL0Index)
+			err := z.makeImmToL0(tableName)
 			if err != nil {
-				zlog.Error("Update WAL file failed, err:", err)
+				zlog.Error("Make imm to L0 failed, err:", err)
+				_ = os.Remove(tableName)
 				return err
 			}
-			z.walWriter = walWriter
-			z.immTable = z.memTable
-		} else {
-			// FIXME:
-			z.immTable = z.memTable
 		}
+		// Update memTable WAL file name, make new memTable
+		walWriter, err := UpdateWALFile(z.walWriter, z.options)
+		if err != nil {
+			zlog.Error("Update WAL file failed, err:", err)
+			return err
+		}
+		z.walWriter = walWriter
+		z.immTable = z.memTable
+		z.memTable = NewMemTable(&StringComparator{})
 	}
 	return nil
 }

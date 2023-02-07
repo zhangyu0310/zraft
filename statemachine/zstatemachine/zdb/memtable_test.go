@@ -1,6 +1,8 @@
 package zdb
 
 import (
+	"fmt"
+	"math/rand"
 	"strconv"
 	"testing"
 
@@ -34,5 +36,69 @@ func TestMemTable_Add(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, exist)
 		assert.Equal(t, val, string(memVal))
+	}
+}
+
+func TestMemTable_AddSameKey(t *testing.T) {
+	testTimes := uint64(1000000)
+	memTable := NewMemTable(&StringComparator{})
+	key := "Test_Key_Same"
+	for i := uint64(0); i < testTimes; i++ {
+		value := fmt.Sprintf("Test_Value_%d", i)
+		memTable.Add(i, ValueTypeValue, []byte(key), []byte(value))
+	}
+	lookup := MakeLookupKey([]byte(key), MaxSequenceNum)
+	exist, result, err := memTable.Get(lookup)
+	assert.Nil(t, err)
+	assert.True(t, exist)
+	assert.Equal(t, fmt.Sprintf("Test_Value_%d", testTimes-1), string(result))
+}
+
+type record struct {
+	Key      []byte
+	Value    []byte
+	Sequence uint64
+	Type     uint8
+}
+
+func TestMemTableIterator_Get(t *testing.T) {
+	testTimes := uint64(100)
+	memTable := NewMemTable(&StringComparator{})
+
+	var lastKey string
+	recordVec := make([]*record, 0, testTimes)
+	for i := uint64(0); i < testTimes; i++ {
+		key := fmt.Sprintf("Test_Key_%d", i)
+		value := fmt.Sprintf("Test_Value_%d", i)
+		r := rand.Intn(10)
+		if r > 4 {
+			key = lastKey
+		}
+		lastKey = key
+		valueType := ValueTypeValue
+		r = rand.Intn(10)
+		if r > 4 {
+			valueType = ValueTypeDeletion
+		}
+		record := &record{
+			Key:      []byte(key),
+			Value:    []byte(value),
+			Sequence: i,
+			Type:     uint8(valueType),
+		}
+		recordVec = append(recordVec, record)
+		memTable.Add(i, uint8(valueType), []byte(key), []byte(value))
+	}
+
+	iter := NewMemTableIterator(memTable)
+	iter.SeekToFirst()
+	for iter.Valid() {
+		internalKey, value := iter.Get()
+		key := InternalKeyDecode(internalKey)
+		t.Log("User Key:", string(key.GetUserKey()))
+		t.Log("User Value:", string(value))
+		t.Log("Sequence Number:", key.GetSequenceNum())
+		t.Log("Key Type:", key.IsDeleted())
+		iter.Next()
 	}
 }

@@ -40,7 +40,7 @@ func (table *MemTable) Get(key *LookupKey) (bool, []byte, error) {
 			if internalKey.IsDeleted() {
 				return true, nil, ErrDataDeleted
 			}
-			_, index = GetVarUint64(entry[index+uint32(keyLen):], index+uint32(keyLen))
+			_, index = GetVarUint64(entry, index+uint32(keyLen))
 			return true, entry[index:], nil
 		}
 	}
@@ -70,6 +70,53 @@ func (table *MemTable) GetCurrentHeight() int {
 
 func (table *MemTable) Empty() bool {
 	return table.list.head.Next(0) == nil
+}
+
+type MemTableIterator struct {
+	table  *MemTable
+	slIter *SkipListIterator
+}
+
+func NewMemTableIterator(table *MemTable) *MemTableIterator {
+	return &MemTableIterator{
+		table:  table,
+		slIter: NewSkipListIterator(table.list),
+	}
+}
+
+func (iter *MemTableIterator) Valid() bool {
+	return iter.slIter.Valid()
+}
+
+func (iter *MemTableIterator) Get() (key, value []byte) {
+	if iter.Valid() {
+		entry := iter.slIter.Key()
+		index := uint32(0)
+		_, key, index = GetLengthAndValue(entry, index)
+		_, value, index = GetLengthAndValue(entry, index)
+	}
+	return
+}
+
+func (iter *MemTableIterator) Next() {
+	iter.slIter.Next()
+}
+
+func (iter *MemTableIterator) Prev() {
+	iter.slIter.Prev()
+}
+
+func (iter *MemTableIterator) Seek(key []byte) {
+	lookup := MakeLookupKey(key, MaxSequenceNum)
+	iter.slIter.Seek(lookup.GetMemTableKey())
+}
+
+func (iter *MemTableIterator) SeekToFirst() {
+	iter.slIter.SeekToFirst()
+}
+
+func (iter *MemTableIterator) SeekToLast() {
+	iter.slIter.SeekToLast()
 }
 
 type MemTableKeyComparator struct {

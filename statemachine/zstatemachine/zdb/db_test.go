@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func OpenAndPutData(t *testing.T, inputNum uint64, threadNum int, syncMode bool) []map[uint64]string {
+func OpenAndPutData(t *testing.T, inputNum uint64, threadNum int, syncMode, memTable bool) []map[uint64]string {
 	db, err := OpenDB(nil)
 	if err != nil {
 		t.Error("Open DB failed, err:", err)
@@ -39,7 +39,9 @@ func OpenAndPutData(t *testing.T, inputNum uint64, threadNum int, syncMode bool)
 				if err != nil {
 					t.Error("Put data failed, err:", err)
 				}
-				idMap[i] = id
+				if memTable {
+					idMap[i] = id
+				}
 			}
 			wg.Done()
 		}(begin, end, i)
@@ -65,7 +67,7 @@ func TestRecoverDataFromWAL(t *testing.T) {
 	threadNum := 100
 	syncMode := false
 	begin := time.Now()
-	idMap := OpenAndPutData(t, inputNum, threadNum, syncMode)
+	idMap := OpenAndPutData(t, inputNum, threadNum, syncMode, true)
 	end := time.Now()
 	t.Log("Data Size:", inputNum)
 	t.Log("Thread Number:", threadNum)
@@ -88,4 +90,8 @@ func TestRecoverDataFromWAL(t *testing.T) {
 	// Clear
 	_ = os.Remove("./ZDB_WAL_MEM")
 	_ = os.Remove("./ZDB_WAL_IMM")
+}
+
+func TestDBInput(t *testing.T) {
+	OpenAndPutData(t, 100000000, 100, false, false)
 }

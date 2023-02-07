@@ -16,8 +16,9 @@ const (
 )
 
 const (
-	LogBlockSize  = 32768
-	LogHeaderSize = 4 + 2 + 1
+	LogBlockSize   = 32768
+	LogHeaderSize  = 4 + 2 + 1
+	MaxWALFileSize = 128 * 1024 * 1024
 )
 
 func getRecordType(data []byte) int {
@@ -62,7 +63,7 @@ func NewLogWriter(targetFile *os.File, fileLength int64) *LogWriter {
 }
 
 func UpdateWALFile(old *LogWriter, options *Options) (*LogWriter, error) {
-	err := old.file.Close()
+	err := old.Close()
 	if err != nil {
 		zlog.Error("Update WAL failed, old WAL close failed, err:", err)
 		return nil, err
@@ -162,8 +163,17 @@ func (w *LogWriter) AppendRecord(record []byte) error {
 	return nil
 }
 
+func (w *LogWriter) Size() (int64, error) {
+	stat, err := w.file.Stat()
+	return stat.Size(), err
+}
+
 func (w *LogWriter) Sync() error {
 	return w.file.Sync()
+}
+
+func (w *LogWriter) Close() error {
+	return w.file.Close()
 }
 
 func NewLogReader(targetFile *os.File, offset int64) (*LogReader, error) {
