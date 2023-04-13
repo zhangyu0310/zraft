@@ -68,14 +68,14 @@ func UpdateWALFile(old *LogWriter, options *Options) (*LogWriter, error) {
 		zlog.Error("Update WAL failed, old WAL close failed, err:", err)
 		return nil, err
 	}
-	oldPath := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfMemWAL)
-	newPath := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfImmWAL)
-	err = os.Rename(oldPath, newPath)
+	memWalPath := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfMemWAL)
+	immWalPath := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfImmWAL)
+	err = os.Rename(memWalPath, immWalPath)
 	if err != nil {
 		zlog.Error("Update WAL failed, rename old WAL failed, err:", err)
 		return nil, err
 	}
-	file, err := os.OpenFile(oldPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|os.O_EXCL, 0666)
+	file, err := os.OpenFile(memWalPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|os.O_EXCL, 0666)
 	if err != nil {
 		zlog.Error("Update WAL failed, create new memory WAL failed, err:", err)
 		return nil, err

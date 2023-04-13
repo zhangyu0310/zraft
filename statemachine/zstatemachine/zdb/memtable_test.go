@@ -13,7 +13,7 @@ import (
 func TestMemTable_Get(t *testing.T) {
 	memTable := NewMemTable(&StringComparator{})
 	lookupKey := MakeLookupKey([]byte("Test"), 0)
-	exist, _, err := memTable.Get(lookupKey)
+	exist, _, _, err := memTable.Get(lookupKey)
 	assert.Nil(t, err)
 	assert.False(t, exist)
 }
@@ -32,7 +32,7 @@ func TestMemTable_Add(t *testing.T) {
 		key := "Test_" + strconv.Itoa(int(i))
 		val := testMap[i]
 		lookupKey := MakeLookupKey([]byte(key), testTimes+1)
-		exist, memVal, err := memTable.Get(lookupKey)
+		exist, _, memVal, err := memTable.Get(lookupKey)
 		assert.Nil(t, err)
 		assert.True(t, exist)
 		assert.Equal(t, val, string(memVal))
@@ -48,7 +48,7 @@ func TestMemTable_AddSameKey(t *testing.T) {
 		memTable.Add(i, ValueTypeValue, []byte(key), []byte(value))
 	}
 	lookup := MakeLookupKey([]byte(key), MaxSequenceNum)
-	exist, result, err := memTable.Get(lookup)
+	exist, _, result, err := memTable.Get(lookup)
 	assert.Nil(t, err)
 	assert.True(t, exist)
 	assert.Equal(t, fmt.Sprintf("Test_Value_%d", testTimes-1), string(result))
@@ -99,6 +99,28 @@ func TestMemTableIterator_Get(t *testing.T) {
 		t.Log("User Value:", string(value))
 		t.Log("Sequence Number:", key.GetSequenceNum())
 		t.Log("Key Type:", key.IsDeleted())
+		iter.Next()
+	}
+}
+
+func TestKeyInsertOrder(t *testing.T) {
+	memTable := NewMemTable(&StringComparator{})
+	memTable.Add(1, ValueTypeValue, []byte("a"), []byte("a_1"))
+	memTable.Add(2, ValueTypeValue, []byte("b"), []byte("b_2"))
+	memTable.Add(3, ValueTypeValue, []byte("c"), []byte("c_3"))
+	memTable.Add(4, ValueTypeValue, []byte("a"), []byte("a_4"))
+	memTable.Add(5, ValueTypeValue, []byte("b"), []byte("b_5"))
+	memTable.Add(6, ValueTypeValue, []byte("c"), []byte("c_6"))
+	memTable.Add(7, ValueTypeValue, []byte("a"), []byte("a_7"))
+	memTable.Add(8, ValueTypeValue, []byte("b"), []byte("b_8"))
+	memTable.Add(9, ValueTypeValue, []byte("c"), []byte("c_9"))
+	iter := NewMemTableIterator(memTable)
+	iter.SeekToFirst()
+	for iter.Valid() {
+		key, value := iter.Get()
+		internalKey := InternalKeyDecode(key)
+		t.Log("key:", string(internalKey.GetUserKey()), "seq:", internalKey.GetSequenceNum())
+		t.Log("value:", string(value))
 		iter.Next()
 	}
 }

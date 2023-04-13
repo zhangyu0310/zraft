@@ -1,0 +1,34 @@
+Data Size: 1000000
+Thread Number: 1
+Sync Mode: false
+Time Used: 9.284689692 9.259935066 9.976949589
+
+Data Size: 1000000
+Thread Number: 10
+Sync Mode: false
+Time Used: 5.237898062 5.236987221 5.5987094630000005
+
+Data Size: 1000000
+Thread Number: 100
+Sync Mode: false
+Time Used: 5.042464387 4.967982378 5.145717424
+
+Data Size: 1000000
+Thread Number: 1
+Sync Mode: true
+Time Used: ∞
+
+Data Size: 1000000
+Thread Number: 10
+Sync Mode: true
+Time Used: ∞
+
+Data Size: 1000000
+Thread Number: 50
+Sync Mode: true
+Time Used: 806.01558122
+
+Data Size: 1000000
+Thread Number: 100
+Sync Mode: true
+Time Used: 393.521274775

@@ -10,7 +10,7 @@ const (
 )
 
 type InternalKey struct {
-	Key []byte
+	key []byte
 	// sequence [sequence] [deletion] = total 8 bytes
 	//            7 byte     1 bytes
 	sequence uint64
@@ -18,14 +18,14 @@ type InternalKey struct {
 
 func NewInternalKey(userKey []byte, sequence uint64, valType uint8) *InternalKey {
 	internalKey := &InternalKey{
-		Key:      userKey,
+		key:      userKey,
 		sequence: sequence<<8 | uint64(valType),
 	}
 	return internalKey
 }
 
 func (key *InternalKey) GetUserKey() []byte {
-	return key.Key
+	return key.key
 }
 
 func (key *InternalKey) GetSequenceNum() uint64 {
@@ -41,8 +41,8 @@ func (key *InternalKey) GetKeyType() uint8 {
 }
 
 func InternalKeyEncode(key *InternalKey) []byte {
-	data := make([]byte, 0, len(key.Key)+8)
-	data = append(data, key.Key...)
+	data := make([]byte, 0, len(key.GetUserKey())+8)
+	data = append(data, key.GetUserKey()...)
 	fixedSeq := EncodeFixedUint64(key.sequence)
 	data = append(data, fixedSeq[:]...)
 	return data
@@ -56,7 +56,7 @@ func InternalKeyDecode(data []byte) *InternalKey {
 	var seq FixedUint64
 	copy(seq[:], data[dataLen-8:])
 	key := &InternalKey{
-		Key:      data[:dataLen-8],
+		key:      data[:dataLen-8],
 		sequence: DecodeFixedUint64(seq),
 	}
 	return key
@@ -83,6 +83,7 @@ func (comp *InternalKeyComparator) Compare(a, b []byte) int {
 		copy(fixedB[:], b[len(a)-8:])
 		seqA := DecodeFixedUint64(fixedA)
 		seqB := DecodeFixedUint64(fixedB)
+		// Sequence bigger is the newer one, so return small value.
 		if seqA > seqB {
 			res = -1
 		} else if seqA < seqB {
@@ -93,7 +94,15 @@ func (comp *InternalKeyComparator) Compare(a, b []byte) int {
 }
 
 func (comp *InternalKeyComparator) CompareInternalKey(a *InternalKey, b *InternalKey) int {
-	return comp.Compare(InternalKeyEncode(a), InternalKeyEncode(b))
+	res := comp.UserComparator.Compare(a.GetUserKey(), b.GetUserKey())
+	if res == 0 {
+		if a.GetSequenceNum() > b.GetSequenceNum() {
+			res = -1
+		} else if a.GetSequenceNum() < b.GetSequenceNum() {
+			res = 1
+		}
+	}
+	return res
 }
 
 type LookupKey struct {

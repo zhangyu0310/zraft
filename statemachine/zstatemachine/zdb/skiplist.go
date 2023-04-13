@@ -3,6 +3,8 @@ package zdb
 import (
 	"math/rand"
 	"sync/atomic"
+
+	zlog "github.com/zhangyu0310/zlogger"
 )
 
 const (
@@ -27,27 +29,7 @@ type SkipListIterator struct {
 
 func NewSkipList(cmp func([]byte, []byte) int) *SkipList {
 	if cmp == nil {
-		cmp = func(src1 []byte, src2 []byte) int {
-			i := 0
-			for {
-				if i == len(src1) || i == len(src2) {
-					if len(src1) > len(src2) {
-						return 1
-					} else if len(src1) < len(src2) {
-						return -1
-					} else {
-						return 0
-					}
-				}
-				if src1[i] == src2[i] {
-					i++
-				} else if src1[i] > src2[i] {
-					return 1
-				} else {
-					return -1
-				}
-			}
-		}
+		zlog.Panic("Need a compare function for skip list!")
 	}
 	sl := &SkipList{
 		head:      newNode(nil, MaxHeight),

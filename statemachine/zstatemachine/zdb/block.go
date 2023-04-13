@@ -16,7 +16,8 @@ type Block struct {
 	data          []byte
 	size          int
 	restartNum    int
-	restartOffset uint32
+	restartOffset uint32 // Restart point offset in block data.
+	comparator    *InternalKeyComparator
 }
 
 type BlockIter struct {
@@ -34,7 +35,7 @@ type RowData struct {
 	value           []byte
 }
 
-func NewBlock(data []byte) (*Block, error) {
+func NewBlock(data []byte, userComparator Comparator) (*Block, error) {
 	size := len(data)
 	if size < 4 {
 		return nil, ErrBlockDataInvalid
@@ -44,6 +45,7 @@ func NewBlock(data []byte) (*Block, error) {
 		size:          size,
 		restartNum:    0,
 		restartOffset: 0,
+		comparator:    NewInternalKeyComparator(userComparator),
 	}
 	fixedRestartNum := GetFixedUint32(b.data, b.size-4)
 	b.restartNum = int(DecodeFixedUint32(fixedRestartNum))
@@ -61,7 +63,7 @@ func NewBlockIter(block *Block) *BlockIter {
 		block:         block,
 		dataOffset:    0,
 		sharedKey:     nil,
-		restartOffset: 0,
+		restartOffset: block.restartOffset,
 	}
 	return iter
 }
@@ -88,6 +90,27 @@ func parseBlockData(data []byte, offset uint32) (*RowData, uint32) {
 	}, nextOffset
 }
 
+func (block *Block) Get(key *LookupKey) (bool, []byte, []byte, error) {
+	iter := NewBlockIter(block)
+	iter.Seek(key.GetInternalKey())
+	if iter.Valid() {
+		tKey, tValue, err := iter.Get()
+		if err != nil {
+			zlog.Error("Get block data failed, err:", err)
+			return false, nil, nil, err
+		}
+		tKeyInternal := InternalKeyDecode(tKey)
+		if block.comparator.UserComparator.Compare(
+			tKeyInternal.GetUserKey(), key.GetUserKey()) == 0 {
+			if tKeyInternal.IsDeleted() {
+				return true, tKey, nil, ErrDataDeleted
+			}
+			return true, tKey, tValue, nil
+		}
+	}
+	return false, nil, nil, nil
+}
+
 func (iter *BlockIter) getRestartPoint() uint32 {
 	fixedRestart := GetFixedUint32(iter.block.data, int(iter.restartOffset))
 	restart := DecodeFixedUint32(fixedRestart)
@@ -102,7 +125,7 @@ func (iter *BlockIter) Next() error {
 	// Get restart mode
 	restartMode := false
 	restart := iter.getRestartPoint()
-	if restart <= iter.dataOffset {
+	if restart < iter.dataOffset {
 		if iter.restartOffset+4 < uint32(iter.block.size-4) {
 			// Not at the end of block
 			iter.restartOffset += 4
@@ -142,6 +165,33 @@ func (iter *BlockIter) Get() ([]byte, []byte, error) {
 		key = append(key, rowData.nonSharedKey...)
 	}
 	return key, rowData.value, nil
+}
+
+func (iter *BlockIter) Valid() bool {
+	return iter.dataOffset < iter.block.restartOffset
+}
+
+func (iter *BlockIter) SeekToFirst() {
+	iter.dataOffset = 0
+	iter.restartOffset = iter.block.restartOffset
+}
+
+func (iter *BlockIter) Seek(key []byte) {
+	iter.SeekToFirst()
+	for iter.Valid() {
+		tKey, _, err := iter.Get()
+		if err != nil {
+			return
+		}
+		if iter.block.comparator.Compare(tKey, key) < 0 {
+			err = iter.Next()
+			if err != nil {
+				return
+			}
+		} else {
+			return
+		}
+	}
 }
 
 func (row *RowData) Encode() []byte {

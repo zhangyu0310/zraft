@@ -21,30 +21,29 @@ func NewMemTable(custom Comparator) *MemTable {
 		list:       nil,
 		comparator: NewMemTableKeyComparator(custom),
 	}
-	memTable.list = NewSkipList(func(a, b []byte) int {
-		return memTable.comparator.Compare(a, b)
-	})
+	memTable.list = NewSkipList(memTable.comparator.Compare)
 	return memTable
 }
 
-func (table *MemTable) Get(key *LookupKey) (bool, []byte, error) {
+func (table *MemTable) Get(key *LookupKey) (bool, []byte, []byte, error) {
 	iter := NewSkipListIterator(table.list)
 	iter.Seek(key.GetMemTableKey())
 	if iter.Valid() {
 		entry := iter.Key()
 		varKeyLen, index := GetVarUint64(entry, 0)
 		keyLen := DecodeVarUint64(varKeyLen)
-		internalKey := InternalKeyDecode(entry[index : index+uint32(keyLen)])
+		keyData := entry[index : index+uint32(keyLen)]
+		internalKey := InternalKeyDecode(keyData)
 		if table.comparator.keyComparator.UserComparator.Compare(
-			internalKey.Key, key.GetUserKey()) == 0 {
+			internalKey.GetUserKey(), key.GetUserKey()) == 0 {
 			if internalKey.IsDeleted() {
-				return true, nil, ErrDataDeleted
+				return true, keyData, nil, ErrDataDeleted
 			}
 			_, index = GetVarUint64(entry, index+uint32(keyLen))
-			return true, entry[index:], nil
+			return true, keyData, entry[index:], nil
 		}
 	}
-	return false, nil, nil
+	return false, nil, nil, nil
 }
 
 func (table *MemTable) Add(seq uint64, valueType uint8, key, value []byte) {

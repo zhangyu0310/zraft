@@ -52,7 +52,7 @@ func TestInternalKeyEncodeDecode(t *testing.T) {
 		key := InternalKeyDecode(data)
 		assert.Equal(t, uint64(i), key.GetSequenceNum(),
 			"i is %d, seq is %d", uint64(i), key.GetSequenceNum())
-		assert.Equal(t, u, string(key.Key))
+		assert.Equal(t, u, string(key.GetUserKey()))
 	}
 }
 

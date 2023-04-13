@@ -8,14 +8,36 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func slCmpFunc(src1 []byte, src2 []byte) int {
+	i := 0
+	for {
+		if i == len(src1) || i == len(src2) {
+			if len(src1) > len(src2) {
+				return 1
+			} else if len(src1) < len(src2) {
+				return -1
+			} else {
+				return 0
+			}
+		}
+		if src1[i] == src2[i] {
+			i++
+		} else if src1[i] > src2[i] {
+			return 1
+		} else {
+			return -1
+		}
+	}
+}
+
 func TestNewSkipList(t *testing.T) {
-	sl := NewSkipList(nil)
+	sl := NewSkipList(slCmpFunc)
 	assert.Equal(t, 1, sl.GetMaxHeight())
 	assert.Equal(t, MaxHeight, len(sl.head.next))
 }
 
 func TestSkipList_Insert(t *testing.T) {
-	sl := NewSkipList(nil)
+	sl := NewSkipList(slCmpFunc)
 	idMap := make(map[string]int)
 	loopRound := 100
 	for i := 0; i < loopRound; i++ {
@@ -35,7 +57,7 @@ func TestSkipList_Insert(t *testing.T) {
 }
 
 func TestSkipList_Contains(t *testing.T) {
-	sl := NewSkipList(nil)
+	sl := NewSkipList(slCmpFunc)
 	idMap := make(map[int]string)
 	loopRound := 100
 	for i := 0; i < loopRound; i++ {

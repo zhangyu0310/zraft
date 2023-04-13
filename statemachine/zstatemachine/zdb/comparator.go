@@ -1,5 +1,7 @@
 package zdb
 
+import "strings"
+
 type Comparator interface {
 	Name() string
 	Compare([]byte, []byte) int
@@ -14,12 +16,5 @@ func (comp *StringComparator) Name() string {
 func (comp *StringComparator) Compare(a, b []byte) int {
 	strA := string(a)
 	strB := string(b)
-	if strA == strB {
-		return 0
-	}
-	if strA > strB {
-		return +1
-	} else {
-		return -1
-	}
+	return strings.Compare(strA, strB)
 }

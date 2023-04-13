@@ -4,7 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -19,20 +23,26 @@ const (
 	NameOfMemWAL = "ZDB_WAL_MEM"
 	NameOfImmWAL = "ZDB_WAL_IMM"
 
-	L0TablePrefix = "ZDB_L0"
+	ManiFestFile = "MANIFEST"
+
+	LevelTablePrefix = "ZDB_L"
 )
 
 type DB struct {
-	memTable     *MemTable
-	immTable     *MemTable
-	walWriter    *LogWriter
-	seqCounter   uint64
-	options      *Options
-	writeGroup   []*Writer
-	writeLock    *sync.Mutex
-	tableL0Index uint32
-	tableMeta    []map[string]*TableMeta
-	bgError      error
+	memTable   *MemTable
+	immTable   *MemTable
+	immChanel  chan bool
+	immPending atomic.Value
+	immLock    *sync.Mutex
+	immCond    *sync.Cond
+	walWriter  *LogWriter
+	seqCounter uint64
+	options    *Options
+	writeGroup []*Writer
+	writeLock  *sync.Mutex
+	tableIndex uint32
+	tableMeta  [][]*TableMeta
+	bgError    error
 }
 
 type Writer struct {
@@ -48,6 +58,7 @@ func OpenDB(options *Options) (*DB, error) {
 		options = defaultOptions
 	}
 	pathOfMemWAL := fmt.Sprintf("%s/%s", options.DataDirPath, NameOfMemWAL)
+
 	// Get mem wal offset for wal writer.
 	file, err := os.OpenFile(pathOfMemWAL, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
@@ -59,28 +70,190 @@ func OpenDB(options *Options) (*DB, error) {
 		zlog.Error("Get WAL stat failed. err:", err)
 		return nil, err
 	}
+
+	// Get table file index from manifest file.
+	tableIndex, err := GetTableIndexFromManifest(options.DataDirPath)
+	if err != nil {
+		zlog.Error("Get table index from manifest failed, err:", err)
+		return nil, err
+	}
+
+	// Get all table meta info.
+	tableMeta, err := GetTableMetaInfo(options)
+	if err != nil {
+		zlog.Error("Get table meta info failed, err:", err)
+		return nil, err
+	}
+
 	// Create ZDB
 	db := &DB{
-		memTable:     NewMemTable(&StringComparator{}),
-		immTable:     NewMemTable(&StringComparator{}),
-		walWriter:    NewLogWriter(file, info.Size()),
-		seqCounter:   uint64(0), // Sequence will be updated when read WAL over.
-		options:      options,
-		writeGroup:   make([]*Writer, 0, 16),
-		writeLock:    &sync.Mutex{},
-		tableL0Index: 0,
-		tableMeta:    make([]map[string]*TableMeta, MaxTableLevel),
-		bgError:      nil,
+		memTable:   NewMemTable(options.Comparator),
+		immTable:   NewMemTable(options.Comparator),
+		immChanel:  make(chan bool),
+		immPending: atomic.Value{},
+		immLock:    &sync.Mutex{},
+		immCond:    nil,
+		walWriter:  NewLogWriter(file, info.Size()),
+		seqCounter: uint64(0), // Sequence will be updated when read WAL over.
+		options:    options,
+		writeGroup: make([]*Writer, 0, 16),
+		writeLock:  &sync.Mutex{},
+		tableIndex: tableIndex,
+		tableMeta:  tableMeta,
+		bgError:    nil,
 	}
-	for i := 0; i < MaxTableLevel; i++ {
-		db.tableMeta[i] = make(map[string]*TableMeta)
-	}
+	db.immPending.Store(false)
+	db.immCond = sync.NewCond(db.immLock)
+
+	// Recover WAL data
 	err = db.recoverDataFromWAL()
 	if err != nil {
 		zlog.Error("Recover data from WAL failed, err:", err)
 		return nil, err
 	}
+
+	go db.minorCompaction()
+
 	return db, nil
+}
+
+func GetTableIndexFromManifest(dirPath string) (uint32, error) {
+	manifestPath := fmt.Sprintf("%s/%s", dirPath, ManiFestFile)
+	manifest, err := os.OpenFile(manifestPath, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		zlog.Error("Open manifest file failed, err:", err)
+		return 0, err
+	}
+	manifestSize, err := manifest.Stat()
+	if err != nil {
+		zlog.Error("Get stat of manifest file failed, err:", err)
+		return 0, err
+	}
+	if manifestSize.Size() == 0 {
+		zlog.Info("Manifest size is 0, need set something into it.")
+		zero := EncodeFixedUint32(0)
+		_, err = manifest.Write(zero[:])
+		if err != nil {
+			zlog.Error("Write zero into empty manifest file failed, err:", err)
+			return 0, err
+		}
+		_, err = manifest.Seek(0, 0)
+		if err != nil {
+			zlog.Error("Seek to zero for manifest file failed, err:", err)
+			return 0, err
+		}
+	}
+
+	index := make([]byte, 4)
+	_, err = manifest.Read(index)
+	if err != nil {
+		zlog.Error("Read manifest failed, err:", err)
+		return 0, err
+	}
+	return DecodeFixedUint32(GetFixedUint32(index, 0)), nil
+}
+
+func GetTableMetaInfo(options *Options) ([][]*TableMeta, error) {
+	// Collect all table files.
+	dataFiles, err := ioutil.ReadDir(options.DataDirPath)
+	if err != nil {
+		zlog.Error("Read data dir files info failed, err:", err)
+		return nil, err
+	}
+	tableMeta := make([][]*TableMeta, MaxTableLevel)
+	for i := 0; i < MaxTableLevel; i++ {
+		tableMeta[i] = make([]*TableMeta, 0, 16)
+	}
+	for _, dataFile := range dataFiles {
+		fileName := dataFile.Name()
+		if !dataFile.IsDir() &&
+			strings.HasPrefix(fileName, LevelTablePrefix) {
+			levelStr := fileName[len(LevelTablePrefix) : len(LevelTablePrefix)+1]
+			level, err := strconv.Atoi(levelStr)
+			if err != nil {
+				zlog.ErrorF("Table name [%s] is invalid.", fileName)
+				return nil, err
+			}
+			// Get table level & file index.
+			indexStr := fileName[len(LevelTablePrefix)+len(".index-")+1:]
+			index, err := strconv.Atoi(indexStr)
+			if err != nil {
+				zlog.Error("Table name [%s] is invalid.", fileName)
+				return nil, err
+			}
+			metaVec := tableMeta[level]
+			tableFile, err := os.OpenFile(fileName, os.O_RDONLY, 0666)
+			if err != nil {
+				zlog.ErrorF("Open table file %s failed, err: %s", fileName, err)
+				return nil, err
+			}
+			// Read footer to find out the position of index block.
+			_, err = tableFile.Seek(ConstFooterSize, 2)
+			if err != nil {
+				zlog.ErrorF("Table file %s seek to footer failed, err: %s", fileName, err)
+				return nil, err
+			}
+			footerData := make([]byte, ConstFooterSize)
+			_, err = tableFile.Read(footerData)
+			if err != nil {
+				zlog.ErrorF("Table file %s read footer failed, err: %s", fileName, err)
+				return nil, err
+			}
+			footer := DecodeFooter(footerData)
+			_, err = tableFile.Seek(int64(footer.IndexBlock.Offset), 0)
+			if err != nil {
+				zlog.ErrorF("Table file %s seek to index block failed, err: %s", fileName, err)
+				return nil, err
+			}
+			// Get index block & storage into meta info.
+			indexBlockData := make([]byte, footer.IndexBlock.Size)
+			_, err = tableFile.Read(indexBlockData)
+			if err != nil {
+				zlog.ErrorF("Table file %s read index block from offset %d failed, err: %s",
+					fileName, footer.IndexBlock.Offset, err)
+				return nil, err
+			}
+			indexBlock, err := NewBlock(indexBlockData, options.Comparator)
+			if err != nil {
+				zlog.ErrorF("New table %s index block failed, err: %s", fileName, err)
+				return nil, err
+			}
+			indexBlockIter := NewBlockIter(indexBlock)
+			indexBlockIter.SeekToFirst()
+			var minKey, maxKey []byte
+			meta := NewTableMeta(index, tableFile, options.Comparator)
+			for indexBlockIter.Valid() {
+				key, value, err := indexBlockIter.Get()
+				if err != nil {
+					zlog.Error("Get index block key/value failed, err:", err)
+					return nil, err
+				}
+				if minKey == nil {
+					minKey = key
+				}
+				bh := DecodeBlockHandler(value)
+				meta.AddMetaInfo(key, bh)
+				err = indexBlockIter.Next()
+				if err != nil {
+					if err == ErrIterTouchTheEnd {
+						maxKey = key
+						break
+					}
+					zlog.Error("Index block get next failed, err:", err)
+					return nil, err
+				}
+			}
+			meta.MinKey = minKey
+			meta.MaxKey = maxKey
+			metaVec = append(metaVec, meta)
+		}
+	}
+	for _, metaVec := range tableMeta {
+		sort.Slice(metaVec, func(i, j int) bool {
+			return metaVec[i].TableIndex > metaVec[j].TableIndex
+		})
+	}
+	return tableMeta, nil
 }
 
 func recoverDataInternal(filePath string, targetTable *MemTable) (uint64, error) {
@@ -117,7 +290,10 @@ func recoverDataInternal(filePath string, targetTable *MemTable) (uint64, error)
 			var value []byte
 			_, value, index = GetLengthAndValue(record, index)
 			internalKey := InternalKeyDecode(key)
-			targetTable.Add(internalKey.GetSequenceNum(), internalKey.GetKeyType(), internalKey.Key, value)
+			targetTable.Add(internalKey.GetSequenceNum(),
+				internalKey.GetKeyType(),
+				internalKey.GetUserKey(),
+				value)
 			lastSeq = internalKey.GetSequenceNum()
 		}
 	}
@@ -155,10 +331,39 @@ func (z *DB) Close() error {
 	return nil
 }
 
+func searchTableMap(lookup *LookupKey, tm []*TableMeta) (bool, []byte, []byte, error) {
+	for _, meta := range tm {
+		handler, err := meta.Find(lookup.GetInternalKey())
+		if err != nil {
+			zlog.Debug("Find table meta get %s, key is not in this table", err)
+			continue
+		}
+		block, err := meta.GetBlock(handler)
+		if err != nil {
+			zlog.ErrorF("Get table index [%d] block from handler %v failed, err: %s",
+				meta.TableIndex, handler, err)
+			return false, nil, nil, err
+		}
+		exist, tKey, tValue, err := block.Get(lookup)
+		if err != nil {
+			if err == ErrDataDeleted {
+				return true, nil, nil, ErrDataDeleted
+			} else {
+				zlog.Error("Find in block failed, err:", err)
+				return false, nil, nil, err
+			}
+		}
+		if exist {
+			return true, tKey, tValue, nil
+		}
+	}
+	return false, nil, nil, nil
+}
+
 func (z *DB) Get(key []byte) ([]byte, error) {
 	lookup := MakeLookupKey(key, z.seqCounter)
 	// Search mem table
-	exist, value, err := z.memTable.Get(lookup)
+	exist, _, value, err := z.memTable.Get(lookup)
 	if err != nil {
 		if errors.Is(err, ErrDataDeleted) {
 			return nil, ErrKeyIsNotExist
@@ -169,7 +374,7 @@ func (z *DB) Get(key []byte) ([]byte, error) {
 		return value, nil
 	}
 	// Search imm table
-	exist, value, err = z.immTable.Get(lookup)
+	exist, _, value, err = z.immTable.Get(lookup)
 	if err != nil {
 		if errors.Is(err, ErrDataDeleted) {
 			return nil, ErrKeyIsNotExist
@@ -179,8 +384,20 @@ func (z *DB) Get(key []byte) ([]byte, error) {
 	if exist {
 		return value, nil
 	}
-	// Search L0 files
-
+	// Search table files
+	for level, tm := range z.tableMeta {
+		zlog.Debug("Search level", level, "table files")
+		exist, _, value, err = searchTableMap(lookup, tm)
+		if err != nil {
+			if errors.Is(err, ErrDataDeleted) {
+				return nil, ErrKeyIsNotExist
+			}
+			return nil, err
+		}
+		if exist {
+			return value, nil
+		}
+	}
 	return nil, ErrKeyIsNotExist
 }
 
@@ -221,12 +438,64 @@ func makeData(seq uint64, valueType uint8, key, value []byte) []byte {
 	return data
 }
 
-func (z *DB) makeImmToL0(tableName string) error {
-	tb, err := NewTableBuilder(tableName)
-	if err != nil {
-		zlog.ErrorF("New L0 table builder [%s] failed, err: %s", tableName, err)
-		return err
+func (z *DB) minorCompaction() {
+	for {
+		select {
+		case <-z.immChanel:
+			z.immLock.Lock()
+			z.immPending.Store(true)
+			z.makeImmToL0()
+			z.immPending.Store(false)
+			z.immLock.Unlock()
+			z.immCond.Signal()
+		}
 	}
+}
+
+func (z *DB) makeImmToL0() {
+	tablePath := fmt.Sprintf("%s/%s%d.index-%d", z.options.DataDirPath, LevelTablePrefix, 0, z.tableIndex)
+	tb, err := NewTableBuilder(tablePath)
+	if err != nil {
+		zlog.ErrorF("New L0 table builder [%s] failed, err: %s", tablePath, err)
+		z.bgError = err
+		return
+	}
+	defer func(tb *TableBuilder) {
+		err := tb.Close()
+		if err != nil {
+			zlog.Error("Close L0 table builder failed, err:", err)
+		}
+	}(tb)
+
+	z.tableIndex++
+	manifestPath := fmt.Sprintf("%s/%s", z.options.DataDirPath, ManiFestFile)
+	manifest, err := os.OpenFile(manifestPath, os.O_WRONLY|os.O_TRUNC|os.O_SYNC, 0666)
+	if err != nil {
+		zlog.Error("Modify manifest file failed, err:", err)
+		z.bgError = err
+		return
+	}
+	defer func(manifest *os.File) {
+		err := manifest.Close()
+		if err != nil {
+			zlog.Error("Close manifest file failed, err:", err)
+		}
+	}(manifest)
+	index := EncodeFixedUint32(z.tableIndex)
+	num, err := manifest.Write(index[:])
+	if err != nil || num != 4 {
+		zlog.Error("Write manifest file failed, err:", err)
+		z.bgError = err
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			z.bgError = err
+			zlog.Error("Make imm to L0 failed, err:", err)
+			_ = os.Remove(tablePath)
+		}
+	}()
 
 	immIter := NewMemTableIterator(z.immTable)
 	bb := NewBlockBuilder()
@@ -234,15 +503,16 @@ func (z *DB) makeImmToL0(tableName string) error {
 	for immIter.Valid() {
 		bb.Append(immIter.Get())
 		if bb.Size() > NormalBlockSize {
-			data, lastKey, err := bb.Build(MaxRestartCount)
+			var data, lastKey []byte
+			data, lastKey, err = bb.Build(MaxRestartCount)
 			if err != nil {
 				zlog.Error("Block builder build failed, err:", err)
-				return err
+				return
 			}
 			err = tb.Append(data, lastKey)
 			if err != nil {
 				zlog.Error("Table builder append failed, err:", err)
-				return err
+				return
 			}
 			bb = NewBlockBuilder()
 		}
@@ -252,13 +522,11 @@ func (z *DB) makeImmToL0(tableName string) error {
 	err = tb.Build()
 	if err != nil {
 		zlog.Error("Table builder build failed, err:", err)
-		return err
+		return
 	}
-	z.tableL0Index++
 	z.immTable = nil
 	immWALPath := fmt.Sprintf("%s/%s", z.options.DataDirPath, NameOfImmWAL)
 	_ = os.Remove(immWALPath)
-	return nil
 }
 
 func (z *DB) makeSomeSpace() error {
@@ -276,15 +544,14 @@ func (z *DB) makeSomeSpace() error {
 		// So unlock for other routine to put their writer into writeGroup.
 		z.writeLock.Unlock()
 		defer z.writeLock.Lock()
-		if !z.immTable.Empty() {
-			tableName := fmt.Sprintf("%s.index-%d", L0TablePrefix, z.tableL0Index)
-			err := z.makeImmToL0(tableName)
-			if err != nil {
-				zlog.Error("Make imm to L0 failed, err:", err)
-				_ = os.Remove(tableName)
-				return err
-			}
+		z.immLock.Lock()
+		for z.immPending.Load().(bool) {
+			z.immCond.Wait()
 		}
+		if z.bgError != nil {
+			return z.bgError
+		}
+
 		// Update memTable WAL file name, make new memTable
 		walWriter, err := UpdateWALFile(z.walWriter, z.options)
 		if err != nil {
@@ -293,7 +560,9 @@ func (z *DB) makeSomeSpace() error {
 		}
 		z.walWriter = walWriter
 		z.immTable = z.memTable
-		z.memTable = NewMemTable(&StringComparator{})
+		z.memTable = NewMemTable(z.options.Comparator)
+		z.immChanel <- true
+		z.immLock.Unlock()
 	}
 	return nil
 }

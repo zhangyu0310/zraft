@@ -4,6 +4,7 @@ var (
 	defaultOptions = &Options{
 		DataDirPath:         ".",
 		MaxHeightOfMemTable: 11,
+		Comparator:          &StringComparator{},
 	}
 
 	defaultReadOptions = &ReadOptions{}
@@ -16,6 +17,7 @@ var (
 type Options struct {
 	DataDirPath         string
 	MaxHeightOfMemTable int
+	Comparator          Comparator
 }
 
 type ReadOptions struct {
