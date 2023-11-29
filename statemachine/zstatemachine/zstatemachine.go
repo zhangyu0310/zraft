@@ -1,8 +1,8 @@
 package zstatemachine
 
 import (
+	"zdb/zdb"
 	"zraft/statemachine"
-	"zraft/statemachine/zstatemachine/zdb"
 )
 
 type ZStateMachine struct {
